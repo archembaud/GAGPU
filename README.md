@@ -2,7 +2,9 @@
 A Parallel Genetic Algorithm using CUDA for GPU Computing
 
 The algorithm is outlined in the paper below:
+
 Smith, M.R., Kuo, F.-A., Hsieh, C.-W., Yu, J.-P., Wu, J.-S. and Ferguson, A., Rapid optimization of blast wave mitigation strategies using Quiet Direct Simulation and Genetic Algorithm, Computer Physics Communications, 181[6], 2010.
+
 A brief summary of the approach used is as follows: consider a parameter X which contributes in some unknown way to a fitness function F(X). A population of N children each store their own value of X - unique to each child. The N children together make up a single generation of children - the characteristics of each child (i.e. the values of X) are used in the creation of new generation of children, loosely based around the ideas of genetics.
 In the case where we wish to maximize the value of the fitness, one of these children will have a higher value than the others - we shall call this X1. When creating new children, we choose another parent randomly from the population - X2 - and a third parent is chosen for the sake of measuring the populations’ current variance (X3). When combined, the value of the new child’s XC is:
 
