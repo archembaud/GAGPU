@@ -6,6 +6,7 @@ The algorithm is outlined in the paper below:
 Smith, M.R., Kuo, F.-A., Hsieh, C.-W., Yu, J.-P., Wu, J.-S. and Ferguson, A., Rapid optimization of blast wave mitigation strategies using Quiet Direct Simulation and Genetic Algorithm, Computer Physics Communications, 181[6], 2010.
 
 A brief summary of the approach used is as follows: consider a parameter X which contributes in some unknown way to a fitness function F(X). A population of N children each store their own value of X - unique to each child. The N children together make up a single generation of children - the characteristics of each child (i.e. the values of X) are used in the creation of new generation of children, loosely based around the ideas of genetics.
+
 In the case where we wish to maximize the value of the fitness, one of these children will have a higher value than the others - we shall call this X1. When creating new children, we choose another parent randomly from the population - X2 - and a third parent is chosen for the sake of measuring the populations’ current variance (X3). When combined, the value of the new child’s XC is:
 
       XC = (GF)*X1 + (1-GF)*X2 + SIGMA*RN*(X2-X3)
@@ -18,11 +19,10 @@ where Rf is a uniformly generated random fraction (between 0 and 1) and RN is a 
 The fitness is then computed for each child; if it is found to be an improvement over that parent previously occupying its space in memory, we choose its value of X and associated fitness and save them as part of the next generation information. Otherwise, the parent information is passed on. This process is repeated across all individuals from generation to generation, the result being generations of children which have (eventually) higher levels of fitness with lower in-generation variance.
 
 Key Code Variables
-A brief description of key variables and constants is found below. 
-NOTE: In general,
-•	variables beginning with d_ are stored in GPU memory while h_ are stored in host (CPU) memory.
-•	UPPER_CASE constants are #defined values which are replaced at compile time.
+A brief description of key variables and constants is found below. NOTE: In general,variables beginning with d_ are stored in GPU memory while h_ are stored in host (CPU) memory. UPPER_CASE constants are #defined values which are replaced at compile time.
+
 config.h
+
 NO_GEN	No. of Genetic Algorithm generations to run. Increase if problem is not converged.
 TPB		Threads Per Block executed within each Streaming Multiprocessor on the GPU
 BGP		The number of thread blocks to use on the device. 
