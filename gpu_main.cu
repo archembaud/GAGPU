@@ -18,8 +18,8 @@ float *h_fitness_new;
 float *d_fitness;	// As above, stored on the GPU
 float *d_fitness_new;	// New fitness
 
-float x_min[] = {-5.0, -5.0, -5.0};	// Array of length NO_VAR holding initial minimum values for each parameter
-float x_max[] = {5.0, 5.0, 5.0};	// As above, except this holds the maximum values
+float x_min[] = {1.0, 1.0};	// Array of length NO_VAR holding initial minimum values for each parameter
+float x_max[] = {5.0, 5.0};	// As above, except this holds the maximum values
 
 float *d_fitness_history;
 float *h_fitness_history;
@@ -155,71 +155,100 @@ __global__ void SetupRfGPU(curandState *state, int N) {
 }
 
 
-__global__ void FindBestGPU(float *fitness, float *Info, float *fitness_history, int N) {
+__global__ void FindBestGPU(float *fitness, float *Info, float *fitness_history, float *x_history, float *x, int N) {
 
-	int thread = threadIdx.x + blockIdx.x*blockDim.x;
+	// This kernel is designed to run with a single block of MAX_TPB threads.
+	int thread = threadIdx.x;
 	__shared__ float best_fitness[MAX_TPB];
 	__shared__ int best_index[MAX_TPB];
 	int pass = 0;
 	int i;
+	int PASS_PER_THREAD = NO_KIDS/MAX_TPB;
+	int REM = NO_KIDS%MAX_TPB;
 
-	/*
-	// This creates an array 1/4 the size of the original array.
-	// The first passneeds to compare 4 values
+	if (REM != 0) {
+		// Feeling lazy at the moment. Use a single thread
+		if (thread == 0) {
+			best_fitness[0] = 10000.0;
+			best_index[0] = -1;
+			for (i = 0; i < NO_KIDS; i++) {
+				// Find the best
+				if (fabs(fitness[i]) < fabs(best_fitness[0])) {
+					// Save it
+					best_fitness[0] = fitness[i];
+					best_index[0] = i;
+				}
+			}
+			d_BestKid = best_index[0];
+			d_BestFitness = best_fitness[0];
+			Info[0] = best_index[0];
+			Info[1] = best_fitness[0];
 
-	if (thread < N) {
+			// Update the history
+		        fitness_history[d_Step] = d_BestFitness;
+	        	d_Step++;
+		}
+	} else {
+		// Each thread has access to PASS_PER_THREAD  elements
+		best_fitness[thread] = 100000.0;
+		best_index[thread] = -1;
 
-		best_index[thread] = thread; // Say this is the best for now
-		best_fitness[thread] = fitness[thread];
-
-		for (i = 0; i < 3; i++) {
-			if (fitness[thread + i*MAX_TPB] < best_fitness[thread]) {
-				// This is a better choice
+		for (i = 0; i < PASS_PER_THREAD; i++) {
+			if (fabs(fitness[thread + i*MAX_TPB]) < fabs(best_fitness[thread])) {
 				best_fitness[thread] = fitness[thread + i*MAX_TPB];
 				best_index[thread] = thread + i*MAX_TPB;
 			}
 		}
 
-		// Now we have a list MAX_TPG long. We may commence reduction
-		__syncthreads();
+		// We have reduced this problem down to one with MAX_TPB elements now.
+		// We could use parallel reduction here.
 
+		/*
+		__syncthreads();
 		if (thread == 0) {
-			// Use a single thread for now
 			for (i = 0; i < MAX_TPB; i++) {
-				if (fitness[i] < best_fitness[thread]) {
-					best_fitness[thread] = fitness[i];
-					best_index[thread] = i;
+				if (fabs(best_fitness[i]) < fabs(best_fitness[thread])) {
+					best_fitness[0] = best_fitness[i];
+					best_index[0] = best_index[i];
 				}
 			}
-			d_BestKid = best_index[thread];
-			d_BestFitness = best_fitness[thread];
-			Info[0] = d_BestKid;
-			Info[1] = d_BestFitness;
+			d_BestKid = best_index[0];
+			d_BestFitness = best_fitness[0];
+			Info[0] = best_index[0];
+			Info[1] = best_fitness[0];
+
 		}
-	}
-	*/
+		*/
 
 
-	if (thread == 0) {
-		best_fitness[0] = 10000.0;
-		best_index[0] = -1;
-		for (i = 0; i < N; i++) {
-			// Find the best
-			if (fabs(fitness[i]) < fabs(best_fitness[0])) {
-				// Save it
-				best_fitness[0] = fitness[i];
-				best_index[0] = i;
+		__syncthreads();
+
+		for (int stride = blockDim.x/2; stride > 0; stride = stride/2) {
+			if (thread < stride) {
+				if (fabs(best_fitness[thread+stride]) < fabs(best_fitness[thread])) {
+ 					// store it
+					best_fitness[thread] = best_fitness[thread + stride];
+					best_index[thread] = best_index[thread + stride];
+				}
 			}
+			__syncthreads();
 		}
-		d_BestKid = best_index[0];
-		d_BestFitness = best_fitness[0];
-		Info[0] = best_index[0];
-		Info[1] = best_fitness[0];
 
-		// Update the history
-	        fitness_history[d_Step] = d_BestFitness;
-        	d_Step++;
+		// We have found the best one
+		if (thread == 0) {
+			d_BestKid = best_index[0];
+			d_BestFitness = best_fitness[0];
+			Info[0] = best_index[0];
+			Info[1] = best_fitness[0];
 
+			// Need also to save the history
+			fitness_history[d_Step] = d_BestFitness;
+			// Save the X values
+			for (i = 0; i < NO_VAR; i++) {
+				x_history[d_Step*NO_VAR + i] = x[d_BestKid*NO_VAR + i];
+			}
+			d_Step++;
+		}
 	}
 }
 
@@ -233,7 +262,7 @@ void Allocate_Memory() {
 	size_t size;
 	cudaError_t error;
 
-        if (DEBUG) printf("Allocating memory for %d kids and %d variables\n", NO_KIDS, NO_VAR);
+        if (DEBUG) printf("  Allocating memory for %d kids and %d variables\n", NO_KIDS, NO_VAR);
 
 
 	// Allocate memory on Host
@@ -246,27 +275,43 @@ void Allocate_Memory() {
 	h_Info = (float*)malloc(size);
 	size = NO_GEN*sizeof(float);
 	h_fitness_history = (float*)malloc(size);
+	size = NO_GEN*NO_VAR*sizeof(float);
+	h_x_history = (float*)malloc(size);
 
 	// Allocate memory on device
 	size = NO_KIDS*NO_VAR*sizeof(float);
 	error = cudaMalloc((void**)&d_x, size);
-	if (DEBUG) printf("Memory Allocation of d_x - Error = %s\n", cudaGetErrorString(error));
+	if (DEBUG) printf("  -Memory Allocation of d_x - Error = %s\n", cudaGetErrorString(error));
         error = cudaMalloc((void**)&d_x_new, size);
-        if (DEBUG) printf("Memory Allocation of d_x_new - Error = %s\n", cudaGetErrorString(error));
+        if (DEBUG) printf("  -Memory Allocation of d_x_new - Error = %s\n", cudaGetErrorString(error));
 
 	size = NO_KIDS*sizeof(float);
 	error = cudaMalloc((void**)&d_fitness, size);
-        if (DEBUG) printf("Memory Allocation of d_fitness - Error = %s\n", cudaGetErrorString(error));
+        if (DEBUG) printf("  -Memory Allocation of d_fitness - Error = %s\n", cudaGetErrorString(error));
+
 	size = 2*sizeof(float);
 	error = cudaMalloc((void**)&d_Info, size);
+        if (DEBUG) printf("  -Memory Allocation of d_Info - Error = %s\n", cudaGetErrorString(error));
+
 	size = NO_KIDS*sizeof(float);
 	error = cudaMalloc((void**)&d_fitness_new, size);
+        if (DEBUG) printf("  -Memory Allocation of d_fitness_new - Error = %s\n", cudaGetErrorString(error));
+
 
 	size = NO_KIDS*sizeof(curandState);
 	error = cudaMalloc((void**)&d_state, size);
+        if (DEBUG) printf("  -Memory Allocation of d_state - Error = %s\n", cudaGetErrorString(error));
+
 
 	size = NO_GEN*sizeof(float);
 	error = cudaMalloc((void**)&d_fitness_history, size);
+        if (DEBUG) printf("  -Memory Allocation of d_fitness_history - Error = %s\n", cudaGetErrorString(error));
+
+	size = NO_GEN*NO_VAR*sizeof(float);
+	error = cudaMalloc((void**)&d_x_history, size);
+        if (DEBUG) printf("  -Memory Allocation of d_x_history - Error = %s\n", cudaGetErrorString(error));
+
+
 }
 
 float ComputeFitness(float *x, int N) {
@@ -283,7 +328,7 @@ float ComputeFitness(float *x, int N) {
 
 void ComputeNewGenCall() {
 
-	if (DEBUG) printf("Computing New Generation\n");
+	if (DEBUG) printf("  Computing New Generation\n");
 	// Compute the next generation properties
 	ComputeNewGenerationGPU<<<BPG,TPB>>>(d_fitness, d_fitness_new, d_x, d_x_new, d_state, NO_KIDS);
 
@@ -294,7 +339,7 @@ void UpdateNextGeneration() {
 
 	size_t size;
 
-	if (DEBUG) printf("Updating next generation\n");
+	if (DEBUG) printf("  Updating next generation\n");
 
 	// Copy fitness
 	size = NO_KIDS*sizeof(float);
@@ -310,16 +355,18 @@ void FindBestGPUCall() {
 	// Using 512 threads on a single block (single SM) to find the best kid.
 	// Very lazy.
 	cudaError_t error;
-	if (DEBUG) printf("Finding best child in current generation\n");
-	FindBestGPU<<<1,MAX_TPB>>>(d_fitness, d_Info, d_fitness_history, NO_KIDS);
+	if (DEBUG) printf("  Finding best child in current generation\n");
+	FindBestGPU<<<1,MAX_TPB>>>(d_fitness, d_Info, d_fitness_history, d_x_history, d_x, NO_KIDS);
 
 	// Copy values across for debugging
-	cudaMemcpy(&h_BestKid, &d_BestKid, sizeof(int), cudaMemcpyDeviceToHost);
-	cudaMemcpy(&h_BestFitness, &d_BestFitness, sizeof(float), cudaMemcpyDeviceToHost);
-	error = cudaMemcpy(h_Info, d_Info, 2*sizeof(float), cudaMemcpyDeviceToHost);
-	printf("Primary: Index  = %d, Fitness = %g\n", h_BestKid, h_BestFitness);
-	printf("CUDA Error on Copy: %s\n", cudaGetErrorString(error));
-	printf("Backup: Index = %g, Fitness = %g\n", h_Info[0], h_Info[1]);
+	//cudaMemcpy(&h_BestKid, &d_BestKid, sizeof(int), cudaMemcpyDeviceToHost);
+	//cudaMemcpy(&h_BestFitness, &d_BestFitness, sizeof(float), cudaMemcpyDeviceToHost);
+	if (DEBUG) {
+		error = cudaMemcpy(h_Info, d_Info, 2*sizeof(float), cudaMemcpyDeviceToHost);
+		//printf("  -Primary: Index  = %d, Fitness = %g\n", h_BestKid, h_BestFitness);
+		//printf("  -CUDA Error on Copy: %s\n", cudaGetErrorString(error));
+		printf("  -Best Kid: Index = %g, Fitness = %g\n", h_Info[0], h_Info[1]);
+	}
 
 }
 
@@ -339,21 +386,28 @@ void SetupGPUCall() {
 
 void Free_Memory() {
 	cudaError_t error;
+
+	printf("   Freeing memory\n");
+
 	// Free host memory
 	free(h_x); free(h_fitness); free(h_Info); free(h_fitness_new); free(h_fitness_history);
 	// Free GPU memory
 	error = cudaFree(d_x);
-	if (DEBUG) printf("Deallocation of d_x: Error = %s\n",	cudaGetErrorString(error));
+	if (DEBUG) printf("  -Deallocation of d_x: Error = %s\n",	cudaGetErrorString(error));
         error = cudaFree(d_x_new);
-        if (DEBUG) printf("Deallocation of d_x_new: Error = %s\n",  cudaGetErrorString(error));
+        if (DEBUG) printf("  -Deallocation of d_x_new: Error = %s\n",  cudaGetErrorString(error));
 	error = cudaFree(d_fitness);
-        if (DEBUG) printf("Deallocation of d_fitness: Error = %s\n",  cudaGetErrorString(error));
+        if (DEBUG) printf("  -Deallocation of d_fitness: Error = %s\n",  cudaGetErrorString(error));
 	error = cudaFree(d_Info);
+	if (DEBUG) printf("  -Deallocation of d_Info: Error = %s\n",  cudaGetErrorString(error));
 	error = cudaFree(d_fitness_new);
-
+        if (DEBUG) printf("  -Deallocation of d_fitness_new: Error = %s\n",  cudaGetErrorString(error));
 	error = cudaFree(d_state);
-
+        if (DEBUG) printf("  -Deallocation of d_state: Error = %s\n",  cudaGetErrorString(error));
 	error = cudaFree(d_fitness_history);
+        if (DEBUG) printf("  -Deallocation of d_fitness_history: Error = %s\n",  cudaGetErrorString(error));
+	error = cudaFree(d_x_history);
+        if (DEBUG) printf("  -Deallocation of d_x_history: Error = %s\n",  cudaGetErrorString(error));
 
 }
 
@@ -449,7 +503,7 @@ float RandNf() {
 void SaveFitness() {
 
 	FILE *pFile;
-	int i;
+	int i, j;
 	pFile = fopen("Fitness.txt", "w");
 
 	if (pFile == NULL) {
@@ -467,10 +521,15 @@ void SaveFitness() {
 		printf("Error: Could not open History.txt for writing\n");
 	} else {
 		for (i = 0; i < NO_GEN; i++) {
-			fprintf(pFile, "%d\t%g\n", i, h_fitness_history[i]);
+			fprintf(pFile, "%d\t", i);
+			for (j = 0; j < NO_VAR; j++) {
+				fprintf(pFile, "%g\t", h_x_history[i*NO_VAR + j]);
+			}
+			fprintf(pFile, "%g\n", i, h_fitness_history[i]);
 		}
 		fclose(pFile);
 	}
+
 
 }
 
@@ -490,27 +549,35 @@ void SendToHost() {
 	float BestFitness;
 	int var;
         cudaError_t error;
+	if (DEBUG) printf("   Sending data from GPU to Host\n");
         error = cudaMemcpy(h_fitness, d_fitness, size, cudaMemcpyDeviceToHost);
-        if (DEBUG) printf("Memcpy to host: d_fitness: Error = %s\n", cudaGetErrorString(error));
+        if (DEBUG) printf("  -Memcpy to host: d_fitness: Error = %s\n", cudaGetErrorString(error));
 
 	error = cudaMemcpy(h_fitness_new, d_fitness_new, size, cudaMemcpyDeviceToHost);
-	if (DEBUG) printf("Memcpy to host: d_fitness_new: Error = %s\n", cudaGetErrorString(error));
+	if (DEBUG) printf("  -Memcpy to host: d_fitness_new: Error = %s\n", cudaGetErrorString(error));
 
 	// Copy the values of X across too
 	size = NO_KIDS*NO_VAR*sizeof(float);
         error = cudaMemcpy(h_x, d_x, size, cudaMemcpyDeviceToHost);
-        if (DEBUG) printf("Memcpy to host: d_x: Error = %s\n", cudaGetErrorString(error));
+        if (DEBUG) printf("  -Memcpy to host: d_x: Error = %s\n", cudaGetErrorString(error));
 
 	// Copy the history across
 	size = NO_GEN*sizeof(float);
 	error = cudaMemcpy(h_fitness_history, d_fitness_history, size, cudaMemcpyDeviceToHost);
+        if (DEBUG) printf("  -Memcpy to host: d_fitness_history: Error = %s\n", cudaGetErrorString(error));
+
+
+	size = NO_GEN*NO_VAR*sizeof(float);
+	error = cudaMemcpy(h_x_history, d_x_history, size, cudaMemcpyDeviceToHost);
+        if (DEBUG) printf("  -Memcpy to host: d_x_history: Error = %s\n", cudaGetErrorString(error));
+
 
 	// Debug time - find best
 	BestFitness = 10000.0;
 	BestIndex = -1;
 
 	for (i = 0; i < NO_KIDS; i++) {
-		if (h_fitness[i] < BestFitness) {
+		if (fabs(h_fitness[i]) < fabs(BestFitness)) {
 			BestFitness = h_fitness[i];
 			BestIndex = i;
 		}
@@ -520,4 +587,6 @@ void SendToHost() {
 	for (var = 0; var < NO_VAR; var++) {
 		printf("%g,\t", h_x[BestIndex*NO_VAR + var]);
 	}
+
+	// Debugging - copy info
 }

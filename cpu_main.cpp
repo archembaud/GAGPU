@@ -23,14 +23,11 @@ int main() {
 	// Send it to the device
 	SendToGPU();
 
-	// Test / Debug
-	FindBestGPUCall();
-
 	// Compute the fitness
 	SetupGPUCall();
 
 	for (int gen = 0; gen < NO_GEN; gen++) {
-		if (DEBUG) printf("=== Computing next generation\n");
+		if (DEBUG) printf("=== Computing generation %d of %d ===\n", gen+1, NO_GEN);
 		// Real Test
 		FindBestGPUCall();
 
