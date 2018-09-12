@@ -26,6 +26,9 @@ int main() {
 	// Compute the fitness
 	SetupGPUCall();
 
+	// Start the clocl
+	TicGPU();
+
 	for (int gen = 0; gen < NO_GEN; gen++) {
 		if (DEBUG) printf("=== Computing generation %d of %d ===\n", gen+1, NO_GEN);
 		// Real Test
@@ -37,6 +40,9 @@ int main() {
 		// Update generation
 		UpdateNextGeneration();
 	}
+
+	// Stop the clock
+	TocGPU();
 
 	// Send information to the host
 	SendToHost();

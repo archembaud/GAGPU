@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <sys/time.h>
 #include <curand.h>
 #include <curand_kernel.h>
 #include "config.h"
@@ -18,8 +19,8 @@ float *h_fitness_new;
 float *d_fitness;	// As above, stored on the GPU
 float *d_fitness_new;	// New fitness
 
-float x_min[] = {1.0, 1.0};	// Array of length NO_VAR holding initial minimum values for each parameter
-float x_max[] = {5.0, 5.0};	// As above, except this holds the maximum values
+float x_min[] = {1.5, 1.5};	// Array of length NO_VAR holding initial minimum values for each parameter
+float x_max[] = {2.0, 2.0};	// As above, except this holds the maximum values
 
 float *d_fitness_history;
 float *h_fitness_history;
@@ -37,6 +38,11 @@ float h_BestFitness; 			// Host the best fitness too
 
 float *d_Info;
 float *h_Info;
+
+// Create redundant timers
+cudaEvent_t start, stop;
+int msec;
+struct timeval start2, stop2, result;
 
 
 /* ---------------------------------
@@ -56,6 +62,7 @@ __device__ float MaxFrac(float input) {
 
 __device__ float ComputeFitnessGPU(float *x, int Z) {
 
+	/*
 	// Ackley Function for N inputs
 	int i;
 	float sum1 = 0.0, sum2 = 0.0;
@@ -65,6 +72,13 @@ __device__ float ComputeFitnessGPU(float *x, int Z) {
 	}
 
 	return (-20.0*expf(-0.2*sqrtf(0.5*sum1)) - expf(0.5*sum2) + expf(1) + 20.0);
+	*/
+	// Goldstein-Price function (two variables)
+	return (1.0 + (x[0]+x[1]+1.0)*(x[0]+x[1]+1.0)*(19.0-14.0*x[0]+3.0*x[0]*x[0]-14.0*x[1]+6.0*x[0]*x[1]+3.0*x[1]*x[1]))*
+		(30.0 + (2.0*x[0]-3.0*x[1])*(2.0*x[0]-3.0*x[1])*(18.0-32.0*x[0]+12.0*x[0]*x[0]+48.0*x[1]-36.0*x[0]*x[1]+27.0*x[1]*x[1]));
+
+
+
 
 	// This was used for debugging
 	//return d_BestKid;
@@ -411,6 +425,33 @@ void Free_Memory() {
 
 }
 
+void TicGPU() {
+	// Simple cuda event timer
+	cudaEventRecord(start);
+	// Use the wall clock as well
+	gettimeofday(&start2, NULL);
+
+}
+
+void TocGPU() {
+	// Snycronize
+	cudaDeviceSynchronize();
+
+	// Record end
+	cudaEventRecord(stop);
+	// CPU clock too
+	gettimeofday(&stop2, NULL);
+	// Report the time
+	cudaEventSynchronize(stop);
+	float milliseconds = 0;
+	cudaEventElapsedTime(&milliseconds, start, stop);
+	printf("CUDA Elapsed time = %g microseconds\n", 1000.0*milliseconds);
+	timersub(&stop2, &start2, &result);
+	printf("CPU Elapsed time = %ld microseconds\n", result.tv_usec);
+}
+
+
+
 void Init() {
 	// Set up the initial values of x for each variable and each child
 	int seed = time(NULL);
@@ -420,6 +461,10 @@ void Init() {
 
 	// Initialize the seed for the random number generator
 	srand(seed);
+
+	// Create the cuda timer events
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
 
 	// Check size of x_min and x_max
 	size[0] = sizeof(x_min);
