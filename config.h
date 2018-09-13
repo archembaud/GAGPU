@@ -8,6 +8,8 @@
 #define MAX_TPB 960 // Used in reduction, should be NO_KIDS/4
 #define FR 1.0
 #define SIG 1.5
+#define NO_TESTS 1
+#define SAMPLE_FREQ 10
 
 void Allocate_Memory();
 void Free_Memory();
@@ -24,3 +26,5 @@ void ComputeNewGenCall();
 void UpdateNextGeneration();
 void TicGPU();
 void TocGPU();
+void IncrementTestCall();
+void SendTestData();

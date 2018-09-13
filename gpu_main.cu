@@ -1,5 +1,5 @@
 // GPU-powered Genetic Algorithm code
-// Version 1.0
+// Version 1.1
 // Matthew Smith, Swinburne University of Technology
 
 #include <stdio.h>
@@ -19,7 +19,7 @@ float *h_fitness_new;
 float *d_fitness;	// As above, stored on the GPU
 float *d_fitness_new;	// New fitness
 
-float x_min[] = {1.5, 1.5};	// Array of length NO_VAR holding initial minimum values for each parameter
+float x_min[] = {-2.0, -2.0};	// Array of length NO_VAR holding initial minimum values for each parameter
 float x_max[] = {2.0, 2.0};	// As above, except this holds the maximum values
 
 float *d_fitness_history;
@@ -36,20 +36,32 @@ curandState *d_state;			// CuRAND state
 int h_BestKid;				// Hold the best kid on the host
 float h_BestFitness; 			// Host the best fitness too
 
-float *d_Info;
+float *d_Info;				// Used for double checking
 float *h_Info;
+
+__device__ int d_Test;			// Our current ensemble (test)
 
 // Create redundant timers
 cudaEvent_t start, stop;
 int msec;
 struct timeval start2, stop2, result;
 
+// Data to hold ensemble information
+float *d_avg_fitness;		// 1D array of length NO_GEN*NO_TESTS
+float *h_avg_fitness;		// Same, only stored on the host
 
 /* ---------------------------------
 
 	Device and GPU functions
 
 -----------------------------------*/
+
+__global__ void Increment_Step() {
+
+	// All we are doing is incrementing the step
+	d_Test++;
+
+}
 
 __device__ float MaxFrac(float input) {
 
@@ -166,10 +178,15 @@ __global__ void SetupRfGPU(curandState *state, int N) {
 	if (thread < N) {
 		curand_init(1234, thread, 0, &state[thread]);
 	}
+
+	if (thread == 0) {
+		// We can also initialize the ensemble count here
+		d_Test = 0;
+	}
 }
 
 
-__global__ void FindBestGPU(float *fitness, float *Info, float *fitness_history, float *x_history, float *x, int N) {
+__global__ void FindBestGPU(float *fitness, float *Info, float *fitness_history, float *x_history, float *x, float *avg_fitness, int N) {
 
 	// This kernel is designed to run with a single block of MAX_TPB threads.
 	int thread = threadIdx.x;
@@ -257,6 +274,10 @@ __global__ void FindBestGPU(float *fitness, float *Info, float *fitness_history,
 
 			// Need also to save the history
 			fitness_history[d_Step] = d_BestFitness;
+
+			// Also need to save this as part of the larger test ensemble
+			avg_fitness[d_Test*NO_GEN + d_Step] = d_BestFitness;
+
 			// Save the X values
 			for (i = 0; i < NO_VAR; i++) {
 				x_history[d_Step*NO_VAR + i] = x[d_BestKid*NO_VAR + i];
@@ -269,6 +290,45 @@ __global__ void FindBestGPU(float *fitness, float *Info, float *fitness_history,
 /* -----------------------------------
 	CPU and Wrapping functions
 --------------------------------------*/
+
+void IncrementTestCall() {
+
+	Increment_Step<<<1,1>>>();
+
+}
+
+void SendTestData() {
+
+	// Copy the ensemble test data back to the host
+	cudaError_t error;
+	size_t size;
+	FILE *pFile;
+	int index;
+	size = NO_GEN*NO_TESTS*sizeof(float);
+	error = cudaMemcpy(h_avg_fitness, d_avg_fitness, size, cudaMemcpyDeviceToHost);
+
+	// May as well save the test data too
+	pFile = fopen("TestHist.txt", "w");
+	if (pFile == NULL) {
+		printf("Error opening TestHist.txt for writing\n");
+	} else {
+		index = 0;
+		for (int i = 0; i < NO_TESTS; i++) {
+			for (int j = 0; j < NO_GEN; j++) {
+				fprintf(pFile, "%g", h_avg_fitness[index]);
+				if (j == (NO_GEN-1)) {
+					fprintf(pFile, "\n");
+				} else {
+					fprintf(pFile, "\t");
+				}
+				index++;
+			}
+		}
+	}
+
+
+
+}
 
 
 void Allocate_Memory() {
@@ -291,6 +351,8 @@ void Allocate_Memory() {
 	h_fitness_history = (float*)malloc(size);
 	size = NO_GEN*NO_VAR*sizeof(float);
 	h_x_history = (float*)malloc(size);
+	size = NO_GEN*NO_TESTS*sizeof(float);
+	h_avg_fitness = (float*)malloc(size);
 
 	// Allocate memory on device
 	size = NO_KIDS*NO_VAR*sizeof(float);
@@ -324,6 +386,10 @@ void Allocate_Memory() {
 	size = NO_GEN*NO_VAR*sizeof(float);
 	error = cudaMalloc((void**)&d_x_history, size);
         if (DEBUG) printf("  -Memory Allocation of d_x_history - Error = %s\n", cudaGetErrorString(error));
+
+	size = NO_GEN*NO_TESTS*sizeof(float);
+	error = cudaMalloc((void**)&d_avg_fitness, size);
+        if (DEBUG) printf("  -Memory Allocation of d_avg_fitness - Error = %s\n", cudaGetErrorString(error));
 
 
 }
@@ -370,7 +436,7 @@ void FindBestGPUCall() {
 	// Very lazy.
 	cudaError_t error;
 	if (DEBUG) printf("  Finding best child in current generation\n");
-	FindBestGPU<<<1,MAX_TPB>>>(d_fitness, d_Info, d_fitness_history, d_x_history, d_x, NO_KIDS);
+	FindBestGPU<<<1,MAX_TPB>>>(d_fitness, d_Info, d_fitness_history, d_x_history, d_x, d_avg_fitness, NO_KIDS);
 
 	// Copy values across for debugging
 	//cudaMemcpy(&h_BestKid, &d_BestKid, sizeof(int), cudaMemcpyDeviceToHost);
@@ -404,7 +470,7 @@ void Free_Memory() {
 	printf("   Freeing memory\n");
 
 	// Free host memory
-	free(h_x); free(h_fitness); free(h_Info); free(h_fitness_new); free(h_fitness_history);
+	free(h_x); free(h_fitness); free(h_Info); free(h_fitness_new); free(h_fitness_history); free(h_avg_fitness);
 	// Free GPU memory
 	error = cudaFree(d_x);
 	if (DEBUG) printf("  -Deallocation of d_x: Error = %s\n",	cudaGetErrorString(error));
@@ -422,6 +488,9 @@ void Free_Memory() {
         if (DEBUG) printf("  -Deallocation of d_fitness_history: Error = %s\n",  cudaGetErrorString(error));
 	error = cudaFree(d_x_history);
         if (DEBUG) printf("  -Deallocation of d_x_history: Error = %s\n",  cudaGetErrorString(error));
+	error = cudaFree(d_avg_fitness);
+        if (DEBUG) printf("  -Deallocation of d_avg_history: Error = %s\n",  cudaGetErrorString(error));
+
 
 }
 
@@ -630,8 +699,9 @@ void SendToHost() {
 	printf("Best Index = %d, Best Fitness = %g\n", BestIndex, BestFitness);
 	printf("X Values for best = ");
 	for (var = 0; var < NO_VAR; var++) {
-		printf("%g,\t", h_x[BestIndex*NO_VAR + var]);
+		printf("%g, ", h_x[BestIndex*NO_VAR + var]);
 	}
+	printf("\n");
 
 	// Debugging - copy info
 }
