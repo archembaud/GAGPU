@@ -74,7 +74,7 @@ __device__ float MaxFrac(float input) {
 
 __device__ float ComputeFitnessGPU(float *x, int Z) {
 
-	/*
+
 	// Ackley Function for N inputs
 	int i;
 	float sum1 = 0.0, sum2 = 0.0;
@@ -84,16 +84,14 @@ __device__ float ComputeFitnessGPU(float *x, int Z) {
 	}
 
 	return (-20.0*expf(-0.2*sqrtf(0.5*sum1)) - expf(0.5*sum2) + expf(1) + 20.0);
-	*/
+
+	/*
 	// Goldstein-Price function (two variables)
 	return (1.0 + (x[0]+x[1]+1.0)*(x[0]+x[1]+1.0)*(19.0-14.0*x[0]+3.0*x[0]*x[0]-14.0*x[1]+6.0*x[0]*x[1]+3.0*x[1]*x[1]))*
 		(30.0 + (2.0*x[0]-3.0*x[1])*(2.0*x[0]-3.0*x[1])*(18.0-32.0*x[0]+12.0*x[0]*x[0]+48.0*x[1]-36.0*x[0]*x[1]+27.0*x[1]*x[1]));
 
+	*/
 
-
-
-	// This was used for debugging
-	//return d_BestKid;
 }
 
 __global__ void ComputeNewGenerationGPU(float *fitness, float *fitness_new, float *x, float *x_new, curandState *state, int N) {

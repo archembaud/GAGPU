@@ -6,10 +6,9 @@
 #define DEBUG 0
 #define PI_F 3.141592654
 #define MAX_TPB 960 // Used in reduction, should be NO_KIDS/4
-#define FR 1.0
-#define SIG 1.5
-#define NO_TESTS 1
-#define SAMPLE_FREQ 10
+#define FR 2.0
+#define SIG 0.5
+#define NO_TESTS 1000
 
 void Allocate_Memory();
 void Free_Memory();
